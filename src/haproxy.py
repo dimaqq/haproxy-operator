@@ -12,6 +12,8 @@ from charms.operator_libs_linux.v0 import apt
 from charms.operator_libs_linux.v1 import systemd
 from jinja2 import Template
 
+from state.config import CharmConfig
+
 APT_PACKAGE_VERSION = "2.8.5-1ubuntu3"
 APT_PACKAGE_NAME = "haproxy"
 HAPROXY_CONFIG_DIR = Path("/etc/haproxy")
@@ -38,8 +40,8 @@ HAPROXY_SERVICE = "haproxy"
 logger = logging.getLogger()
 
 
-class HaproxyServiceStartError(Exception):
-    """Error when starting the haproxy service."""
+class HaproxyServiceRestartError(Exception):
+    """Error when restarting the haproxy service."""
 
 
 class HAProxyService:
@@ -55,19 +57,19 @@ class HAProxyService:
         apt.add_package(package_names=APT_PACKAGE_NAME, version=APT_PACKAGE_VERSION)
 
         self._render_file(HAPROXY_DHCONFIG, HAPROXY_DH_PARAM, 0o644)
-        self._restart_haproxy_service()
+        self._reload_haproxy_service()
 
         if not self.is_active():
             raise RuntimeError("HAProxy service is not running.")
 
-    def reconcile(self) -> None:
-        """Render the haproxy config and restart the haproxy service."""
-        self._render_haproxy_config()
-        self._restart_haproxy_service()
+    def reconcile(self, config: CharmConfig) -> None:
+        """Render the haproxy config and restart the haproxy service.
 
-    def _restart_haproxy_service(self) -> None:
-        """Restart the haporxy service."""
-        systemd.service_restart(HAPROXY_SERVICE)
+        Args:
+            config: charm config
+        """
+        self._render_haproxy_config(config)
+        self._reload_haproxy_service()
 
     def is_active(self) -> bool:
         """Indicate if the haproxy service is active.
@@ -92,9 +94,17 @@ class HAProxyService:
         # Set the correct ownership for the file.
         os.chown(path, uid=u.pw_uid, gid=u.pw_gid)
 
-    def _render_haproxy_config(self) -> None:
-        """Render the haproxy configuration file."""
+    def _render_haproxy_config(self, config: CharmConfig) -> None:
+        """Render the haproxy configuration file.
+
+        Args:
+            config: charm config
+        """
         with open("templates/haproxy.cfg.j2", "r", encoding="utf-8") as file:
             template = Template(file.read(), keep_trailing_newline=True)
-        rendered = template.render()
+        rendered = template.render(config_global_max_connection=config.global_max_connection)
         self._render_file(HAPROXY_CONFIG, rendered, 0o644)
+
+    def _reload_haproxy_service(self) -> None:
+        """Restart the haporxy service."""
+        systemd.service_reload(HAPROXY_SERVICE)
