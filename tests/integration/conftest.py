@@ -4,8 +4,10 @@
 """General configuration module for integration tests."""
 
 import ipaddress
+import json
 import logging
 import os.path
+import textwrap
 import typing
 
 import pytest
@@ -103,3 +105,80 @@ async def get_unit_address(application: Application) -> str:
     if isinstance(unit_ip_address, ipaddress.IPv6Address):
         url = f"http://[{str(unit_ip_address)}]"
     return url
+
+
+@pytest_asyncio.fixture(scope="module", name="any_charm_src")
+async def any_charm_src_fixture() -> dict[str, str]:
+    """any-charm configuration to test with haproxy."""
+    return {
+        "any_charm.py": textwrap.dedent(
+            """
+        from any_charm_base import AnyCharmBase
+        import textwrap
+        import logging
+        logger = logging.getLogger()
+        relation_data = textwrap.dedent(
+            \"\"\"
+                - service_name: my_web_app
+                  service_host: 0.0.0.0
+                  service_port: 80
+                  service_options:
+                  - mode http
+                  - timeout client 300000
+                  - timeout server 300000
+                  - balance leastconn
+                  - option httpchk HEAD / HTTP/1.0
+                  - acl service_1 path_beg -i /service_1
+                  - use_backend extra_service_1 if service_1
+                  servers: [[server1, 10.0.1.1, 80, [check, rise 2, fall 5, maxconn 50]]]
+                  backends:
+                  - backend_name: extra_service_1
+                    servers:
+                    - - extra_server_1
+                      - 10.0.1.1
+                      - 8000
+                      - &id001
+                        - check
+                        - inter 5000
+                        - rise 2
+                        - fall 5
+                        - maxconn 50
+                    - - extra_server_2
+                      - 10.0.1.2
+                      - 8001
+                      - *id001
+            \"\"\"
+        )
+        class AnyCharm(AnyCharmBase):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+
+            def update_relation_data(self):
+                relation = self.model.get_relation("provide-http")
+                relation.data[self.unit].update(
+                    {"services": relation_data, "hostname": "", "port": ""}
+                )
+
+            def update_relation_data_single_service(self):
+                relation = self.model.get_relation("provide-http")
+                relation.data[self.unit].update(
+                    {"hostname": "10.0.0.0", "port": "80", "services": ""}
+                )
+        """
+        ),
+    }
+
+
+@pytest_asyncio.fixture(scope="function", name="any_charm_requirer")
+async def any_charm_requirer_fixture(
+    model: Model, any_charm_src: dict[str, str]
+) -> typing.AsyncGenerator[Application, None]:
+    """Deploy any-charm and configure it to serve as a requirer for the http interface."""
+    application = await model.deploy(
+        "any-charm",
+        application_name="requirer",
+        channel="beta",
+        config={"src-overwrite": json.dumps(any_charm_src)},
+    )
+    await model.wait_for_idle(apps=[application.name], status="active")
+    yield application
