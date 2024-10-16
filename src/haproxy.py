@@ -10,9 +10,10 @@ from pathlib import Path
 
 from charms.operator_libs_linux.v0 import apt
 from charms.operator_libs_linux.v1 import systemd
-from jinja2 import Template
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from state.config import CharmConfig
+from state.ingress import IngressRequirersInformation
 
 APT_PACKAGE_VERSION = "2.8.5-1ubuntu3"
 APT_PACKAGE_NAME = "haproxy"
@@ -36,13 +37,20 @@ HAPROXY_DH_PARAM = (
 )
 HAPROXY_DHCONFIG = Path(HAPROXY_CONFIG_DIR / "ffdhe2048.txt")
 HAPROXY_SERVICE = "haproxy"
-
+HAPROXY_INGRESS_CONFIG_TEMPLATE = "haproxy_ingress.cfg.j2"
+HAPROXY_LEGACY_CONFIG_TEMPLATE = "haproxy_legacy.cfg.j2"
+HAPROXY_DEFAULT_CONFIG_TEMPLATE = "haproxy.cfg.j2"
+HAPROXY_CERTS_DIR = Path("/var/lib/haproxy/certs")
 
 logger = logging.getLogger()
 
 
 class HaproxyServiceReloadError(Exception):
     """Error when reloading the haproxy service."""
+
+
+class HaproxyInvalidRelationError(Exception):
+    """Exception raised when both the reverseproxy and ingress relation are established."""
 
 
 class HAProxyService:
@@ -63,16 +71,6 @@ class HAProxyService:
         if not self.is_active():
             raise RuntimeError("HAProxy service is not running.")
 
-    def reconcile(self, config: CharmConfig, services: list) -> None:
-        """Render the haproxy config and reload the haproxy service.
-
-        Args:
-            config: Charm config.
-            services: Services definition.
-        """
-        self._render_haproxy_config(config, services)
-        self._reload_haproxy_service()
-
     def is_active(self) -> bool:
         """Indicate if the haproxy service is active.
 
@@ -81,22 +79,72 @@ class HAProxyService:
         """
         return systemd.service_running(APT_PACKAGE_NAME)
 
-    def _render_haproxy_config(self, config: CharmConfig, services: list) -> None:
+    def reconcile_legacy(self, config: CharmConfig, services: list) -> None:
+        """Render the haproxy config for legacy proxying and reload the service.
+
+        Args:
+            config: The charm's config
+            services: List of configuration stanzas for the defined services.
+        """
+        template_context = {
+            "config_global_max_connection": config.global_max_connection,
+            "services": services,
+        }
+        self._render_haproxy_config(HAPROXY_LEGACY_CONFIG_TEMPLATE, template_context)
+        self._reload_haproxy_service()
+
+    def reconcile_ingress(
+        self,
+        config: CharmConfig,
+        ingress_requirers_information: IngressRequirersInformation,
+        external_hostname: str,
+    ) -> None:
+        """Render the haproxy config for ingress proxying and reload the service.
+
+        Args:
+            config: The charm's config.
+            ingress_requirers_information: Parsed information about ingress requirers.
+            external_hostname: Configured external-hostname for TLS.
+        """
+        template_context = {
+            "config_global_max_connection": config.global_max_connection,
+            "ingress_requirers_information": ingress_requirers_information,
+            "config_external_hostname": external_hostname,
+            "haproxy_crt_dir": HAPROXY_CERTS_DIR,
+        }
+        self._render_haproxy_config(HAPROXY_INGRESS_CONFIG_TEMPLATE, template_context)
+        self._reload_haproxy_service()
+
+    def reconcile_default(self, config: CharmConfig) -> None:
+        """Render the default haproxy config and reload the service.
+
+        Args:
+            config (CharmConfig): _description_
+        """
+        self._render_haproxy_config(
+            HAPROXY_DEFAULT_CONFIG_TEMPLATE,
+            {
+                "config_global_max_connection": config.global_max_connection,
+            },
+        )
+        self._reload_haproxy_service()
+
+    def _render_haproxy_config(self, template_file_path: str, context: dict) -> None:
         """Render the haproxy configuration file.
 
         Args:
-            config: Charm config.
-            services: Services definition.
+            template_file_path: Path of the template to load.
+            context: Context needed to render the template.
         """
-        with open("templates/haproxy.cfg.j2", "r", encoding="utf-8") as file:
-            template = Template(
-                file.read(), keep_trailing_newline=True, trim_blocks=True, lstrip_blocks=True
-            )
-
-        rendered = template.render(
-            config_global_max_connection=config.global_max_connection,
-            services=services,
+        env = Environment(
+            loader=FileSystemLoader("templates"),
+            autoescape=select_autoescape(),
+            keep_trailing_newline=True,
+            trim_blocks=True,
+            lstrip_blocks=True,
         )
+        template = env.get_template(template_file_path)
+        rendered = template.render(context)
         render_file(HAPROXY_CONFIG, rendered, 0o644)
 
     def _reload_haproxy_service(self) -> None:

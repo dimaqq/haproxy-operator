@@ -7,6 +7,7 @@ import ipaddress
 import json
 import logging
 import os.path
+import pathlib
 import textwrap
 import typing
 
@@ -167,6 +168,79 @@ async def any_charm_src_fixture() -> dict[str, str]:
         """
         ),
     }
+
+
+@pytest_asyncio.fixture(scope="module", name="any_charm_ingress_requirer_name")
+async def any_charm_ingress_requirer_name_fixture() -> str:
+    """Name of the ingress requirer charm."""
+    return "any-charm-ingress-requirer"
+
+
+@pytest_asyncio.fixture(scope="module", name="any_charm_src_ingress_requirer")
+async def any_charm_src_ingress_requirer_fixture(
+    model: Model, any_charm_ingress_requirer_name: str
+) -> dict[str, str]:
+    """
+    assert: None
+    action: Build and deploy nginx-ingress-integrator charm, also deploy and relate an any-charm
+        application with ingress relation for test purposes.
+    assert: HTTP request should be forwarded to the application.
+    """
+    ingress_path_prefix = f"{model.name}-{any_charm_ingress_requirer_name}"
+    any_charm_py = textwrap.dedent(
+        f"""\
+    import pathlib
+    import subprocess
+    import ops
+    from any_charm_base import AnyCharmBase
+    from ingress import IngressPerAppRequirer
+    import apt
+
+    class AnyCharm(AnyCharmBase):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.ingress = IngressPerAppRequirer(self, port=80)
+
+        def start_server(self):
+            apt.update()
+            apt.add_package(package_names="apache2")
+            www_dir = pathlib.Path("/var/www/html")
+            file_path = www_dir / "{ingress_path_prefix}" / "ok"
+            file_path.parent.mkdir(exist_ok=True)
+            file_path.write_text("ok!")
+            self.unit.status = ops.ActiveStatus("Server ready")
+    """
+    )
+
+    return {
+        "ingress.py": pathlib.Path("lib/charms/traefik_k8s/v2/ingress.py").read_text(
+            encoding="utf-8"
+        ),
+        "apt.py": pathlib.Path("lib/charms/operator_libs_linux/v0/apt.py").read_text(
+            encoding="utf-8"
+        ),
+        "any_charm.py": any_charm_py,
+    }
+
+
+@pytest_asyncio.fixture(scope="function", name="any_charm_ingress_requirer")
+async def any_charm_ingress_requirer_fixture(
+    model: Model,
+    any_charm_src_ingress_requirer: dict[str, str],
+    any_charm_ingress_requirer_name: str,
+) -> typing.AsyncGenerator[Application, None]:
+    """Deploy any-charm and configure it to serve as a requirer for the http interface."""
+    application = await model.deploy(
+        "any-charm",
+        application_name=any_charm_ingress_requirer_name,
+        channel="beta",
+        config={
+            "src-overwrite": json.dumps(any_charm_src_ingress_requirer),
+            "python-packages": "pydantic<2.0",
+        },
+    )
+    await model.wait_for_idle(apps=[application.name], status="active")
+    yield application
 
 
 @pytest_asyncio.fixture(scope="function", name="any_charm_requirer")

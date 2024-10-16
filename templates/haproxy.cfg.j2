@@ -32,17 +32,17 @@ defaults
     timeout connect 5000
     timeout server 50000
 
-{% if not services %}
+frontend prometheus
+    bind :9123
+    mode http
+    http-request use-service prometheus-exporter if { path /metrics }
+    no log
+
+{% block proxy_configuration %}
 frontend default
     bind :80
     default_backend default 
+{% endblock %}
 
 backend default
     http-request return status 200 content-type "text/plain" string "Default page for the haproxy-operator charm"
-{% else %}
-
-{% for service in services %}
-{{ service }}
-{% endfor %}
-{% endif %}
-
