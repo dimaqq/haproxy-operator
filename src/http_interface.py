@@ -16,6 +16,7 @@ import legacy
 
 logger = logging.getLogger()
 SERVICES_CONFIGURATION_KEY = "services"
+DEFAULT_HAPROXY_PORT = 80
 
 
 class HTTPBackendAvailableEvent(RelationEvent):
@@ -26,7 +27,7 @@ class HTTPBackendRemovedEvent(RelationEvent):
     """Event representing that http data has been removed."""
 
 
-class HTTPProviderEvents(CharmEvents):
+class HTTPRequirerEvents(CharmEvents):
     """Container for HTTP Provider events.
 
     Attrs:
@@ -107,14 +108,14 @@ class _IntegrationInterfaceBaseClass(Object):
         return ""
 
 
-class HTTPProvider(_IntegrationInterfaceBaseClass):
+class HTTPRequirer(_IntegrationInterfaceBaseClass):
     """HTTP interface provider class to be instantiated by the haproxy-operator charm.
 
     Attrs:
         on: Custom events that are used to notify the charm using the provider.
     """
 
-    on = HTTPProviderEvents()
+    on = HTTPRequirerEvents()
 
     def _on_relation_joined(self, event: RelationJoinedEvent) -> None:
         """Handle relation-changed event.
@@ -172,6 +173,33 @@ class HTTPProvider(_IntegrationInterfaceBaseClass):
             for unit in relation.units
         ]
         return legacy.get_services_from_relation_data(relation_data)
+
+
+class HTTPProvider(_IntegrationInterfaceBaseClass):
+    """HTTP interface provider class to be instantiated by the haproxy-operator charm."""
+
+    def _on_relation_joined(self, event: RelationJoinedEvent) -> None:
+        """Handle relation-changed event.
+
+        Args:
+            event: relation-changed event.
+        """
+        event.relation.data[self.charm.unit].update(
+            {"hostname": self.bind_address, "port": f"{DEFAULT_HAPROXY_PORT}"}
+        )
+
+    # We add a placeholder implementation of this method because of parent class
+    def _on_relation_changed(self, _: RelationChangedEvent) -> None:
+        """Handle relation-changed event."""
+        logger.debug("Nothing to do for relation-changed hook of website relation, skipping.")
+
+    def _on_relation_broken(self, event: RelationBrokenEvent) -> None:
+        """Handle relation-broken event.
+
+        Args:
+            event: relation-broken event.
+        """
+        event.relation.data[self.charm.unit].clear()
 
 
 def _load_relation_data(relation_data_content: RelationDataContent) -> dict:

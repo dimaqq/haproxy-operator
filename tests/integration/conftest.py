@@ -256,3 +256,17 @@ async def any_charm_requirer_fixture(
     )
     await model.wait_for_idle(apps=[application.name], status="active")
     yield application
+
+
+@pytest_asyncio.fixture(scope="function", name="reverseproxy_requirer")
+async def reverseproxy_requirer_fixture(
+    model: Model,
+) -> typing.AsyncGenerator[Application, None]:
+    """Deploy any-charm and configure it to serve as a requirer for the http interface."""
+    application = await model.deploy(
+        "haproxy",
+        application_name="reverseproxy-requirer",
+        channel="latest/edge",
+    )
+    await model.wait_for_idle(apps=[application.name], status="active")
+    yield application
