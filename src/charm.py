@@ -24,10 +24,11 @@ from charms.traefik_k8s.v2.ingress import (
     IngressPerAppDataRemovedEvent,
     IngressPerAppProvider,
 )
+from interface_hacluster.ops_ha_interface import HAServiceReadyEvent, HAServiceRequires
 from ops.charm import ActionEvent
 from ops.model import Port
 
-from haproxy import HAProxyService
+from haproxy import HAPROXY_SERVICE, HAProxyService
 from http_interface import (
     HTTPBackendAvailableEvent,
     HTTPBackendRemovedEvent,
@@ -35,6 +36,7 @@ from http_interface import (
     HTTPRequirer,
 )
 from state.config import CharmConfig
+from state.ha import HACLUSTER_INTEGRATION, HAPROXY_PEER_INTEGRATION, HAInformation
 from state.ingress import IngressRequirersInformation
 from state.tls import TLSInformation, TLSNotReadyError
 from state.validation import validate_config_and_tls
@@ -76,6 +78,7 @@ def _validate_port(port: int) -> bool:
     return 0 <= port <= 65535
 
 
+# pylint: disable=too-many-instance-attributes
 class HAProxyCharm(ops.CharmBase):
     """Charm haproxy."""
 
@@ -107,6 +110,7 @@ class HAProxyCharm(ops.CharmBase):
             dashboard_dirs=["./src/grafana_dashboards"],
         )
 
+        self.hacluster = HAServiceRequires(self, HACLUSTER_INTEGRATION)
         self.framework.observe(self.on.install, self._on_install)
         self.framework.observe(self.on.config_changed, self._on_config_changed)
         self.framework.observe(self.on.get_certificate_action, self._on_get_certificate_action)
@@ -125,6 +129,7 @@ class HAProxyCharm(ops.CharmBase):
         self.framework.observe(
             self._ingress_provider.on.data_removed, self._on_ingress_data_removed
         )
+        self.framework.observe(self.hacluster.on.ha_ready, self._on_ha_ready)
 
     def _on_install(self, _: typing.Any) -> None:
         """Install the haproxy package."""
@@ -176,6 +181,9 @@ class HAProxyCharm(ops.CharmBase):
 
     def _reconcile(self) -> None:
         """Render the haproxy config and restart the service."""
+        ha_information = HAInformation.from_charm(self)
+        self._reconcile_ha(ha_information)
+
         proxy_mode = self._validate_state()
         if proxy_mode == ProxyMode.INVALID:
             # We don't raise any exception/set status here as it should already be handled
@@ -284,6 +292,37 @@ class HAProxyCharm(ops.CharmBase):
             return ProxyMode.LEGACY
 
         return ProxyMode.NOPROXY
+
+    @validate_config_and_tls(defer=False, block_on_tls_not_ready=False)
+    def _on_ha_ready(self, _: HAServiceReadyEvent) -> None:
+        """Handle the ha-ready event."""
+        self._reconcile()
+
+    def _reconcile_ha(self, ha_information: HAInformation) -> None:
+        """Update ha configuration.
+
+        Args:
+            ha_information: HAInformation charm state component.
+        """
+        if not ha_information.ha_integration_ready:
+            logger.info("ha integration is not ready, skipping.")
+            return
+
+        if not ha_information.haproxy_peer_integration_ready:
+            logger.info("haproxy-peers integration is not ready, skipping.")
+            return
+
+        peer_relation = typing.cast(
+            ops.model.Relation, self.model.get_relation(HAPROXY_PEER_INTEGRATION)
+        )
+
+        if ha_information.configured_vip and ha_information.configured_vip != ha_information.vip:
+            self.hacluster.remove_vip(self.app.name, str(ha_information.configured_vip))
+
+        self.hacluster.add_vip(self.app.name, str(ha_information.vip))
+        self.hacluster.add_systemd_service(f"{self.app.name}-{HAPROXY_SERVICE}", HAPROXY_SERVICE)
+        self.hacluster.bind_resources()
+        peer_relation.data[self.unit].update({"vip": str(ha_information.vip)})
 
 
 if __name__ == "__main__":  # pragma: nocover
