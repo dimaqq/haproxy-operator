@@ -6,6 +6,10 @@
 import logging
 import os
 import pwd
+
+# We silence this rule because subprocess call is only for validating the haproxy config
+# and no user input is parsed
+import subprocess  # nosec B404
 from pathlib import Path
 from subprocess import CalledProcessError, run  # nosec
 
@@ -65,6 +69,10 @@ class HaproxyInvalidRelationError(Exception):
     """Exception raised when both the reverseproxy and ingress relation are established."""
 
 
+class HaproxyValidateConfigError(Exception):
+    """Error when validation of the generated haproxy config failed."""
+
+
 class HAProxyService:
     """HAProxy service class."""
 
@@ -105,6 +113,7 @@ class HAProxyService:
             "services": services,
         }
         self._render_haproxy_config(HAPROXY_LEGACY_CONFIG_TEMPLATE, template_context)
+        self._validate_haproxy_config()
         self._reload_haproxy_service()
 
     def reconcile_ingress(
@@ -127,6 +136,7 @@ class HAProxyService:
             "haproxy_crt_dir": HAPROXY_CERTS_DIR,
         }
         self._render_haproxy_config(HAPROXY_INGRESS_CONFIG_TEMPLATE, template_context)
+        self._validate_haproxy_config()
         self._reload_haproxy_service()
 
     def reconcile_haproxy_route(
@@ -148,6 +158,7 @@ class HAProxyService:
             "haproxy_crt_dir": HAPROXY_CERTS_DIR,
         }
         self._render_haproxy_config(HAPROXY_ROUTE_CONFIG_TEMPLATE, template_context)
+        self._validate_haproxy_config()
         self._reload_haproxy_service()
 
     def reconcile_default(self, config: CharmConfig) -> None:
@@ -162,6 +173,7 @@ class HAProxyService:
                 "config_global_max_connection": config.global_max_connection,
             },
         )
+        self._validate_haproxy_config()
         self._reload_haproxy_service()
 
     def _render_haproxy_config(self, template_file_path: str, context: dict) -> None:
@@ -192,6 +204,23 @@ class HAProxyService:
             systemd.service_reload(HAPROXY_SERVICE)
         except systemd.SystemdError as exc:
             raise HaproxyServiceReloadError("Failed reloading the haproxy service.") from exc
+
+    def _validate_haproxy_config(self) -> None:
+        """Validate the generated HAProxy config.
+
+        Raises:
+            HaproxyValidateConfigError: When validation of the generated HAProxy config failed.
+        """
+        validate_config_command = ["/usr/sbin/haproxy", "-f", str(HAPROXY_CONFIG), "-c"]
+        try:
+            # Ignore bandit rule as we're not parsing user input
+            subprocess.run(validate_config_command, capture_output=True, check=True)  # nosec B603
+        except subprocess.CalledProcessError as exc:
+            logger.error(
+                "Failed validation the HAProxy config: %s",
+                exc.stderr.decode(),
+            )
+            raise HaproxyValidateConfigError("Failed validating the HAProxy config.") from exc
 
 
 def render_file(path: Path, content: str, mode: int) -> None:
