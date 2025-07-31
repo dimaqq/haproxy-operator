@@ -31,21 +31,24 @@ class SomeCharm(CharmBase):
     # There are 2 ways you can use the requirer implementation:
     # 1. To initialize the requirer with parameters:
     self.haproxy_route_requirer = HaproxyRouteRequirer(self,
-        address=<required>,
-        port=<required>,
+        relation_name=<required>,
+        service=<optional>,
+        ports=<optional>,
+        hosts=<optional>,
         paths=<optional>,
         hostname=<optional>,
         additional_hostnames=<optional>,
-        path_rewrite_expressions=<optional>, list of path rewrite expressions,
-        query_rewrite_expressions=<optional>, list of query rewrite expressions,
-        header_rewrites=<optional>, map of {<header_name>: <list of rewrite_expressions>,
         check_interval=<optional>,
         check_rise=<optional>,
         check_fall=<optional>,
-        check_paths=<optional>,
+        check_path=<optional>,
+        check_port=<optional>,
+        path_rewrite_expressions=<optional>, list of path rewrite expressions,
+        query_rewrite_expressions=<optional>, list of query rewrite expressions,
+        header_rewrite_expressions=<optional>, list of (header_name, rewrite_expression),
         load_balancing_algorithm=<optional>, defaults to "leastconn",
         load_balancing_cookie=<optional>, only used when load_balancing_algorithm is cookie
-        rate_limit_connections_per_minutes=<optional>,
+        rate_limit_connections_per_minute=<optional>,
         rate_limit_policy=<optional>,
         upload_limit=<optional>,
         download_limit=<optional>,
@@ -57,6 +60,7 @@ class SomeCharm(CharmBase):
         connect_timeout=<optional>,
         queue_timeout=<optional>,
         server_maxconn=<optional>,
+        unit_address=<optional>,
     )
 
     # 2.To initialize the requirer with no parameters, i.e
@@ -100,7 +104,7 @@ Note that this interface supports relating to multiple endpoints.
 
 Then, to initialise the library:
 ```python
-from charms.haproxy.v1.haproxy_route import HaproxyRouteRequirer
+from charms.haproxy.v1.haproxy_route import HaproxyRouteProvider
 
 class SomeCharm(CharmBase):
     self.haproxy_route_provider = HaproxyRouteProvider(self)
